@@ -2,7 +2,7 @@
 
 一个可直接部署到 GitHub Pages 的静态诗词检索网站。
 
-示例数据见 [sample-data.json](/Users/lishuaiyi/Documents/New%20project/sample-data.json)。
+示例数据见 [sample-data.json](sample-data.json)。
 
 ## 功能
 
