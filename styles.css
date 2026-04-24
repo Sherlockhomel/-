@@ -130,6 +130,49 @@ textarea {
   line-height: 1.7;
 }
 
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 16px;
+  background: rgba(255, 252, 246, 0.9);
+}
+
+.source-card h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.source-card textarea {
+  min-height: 180px;
+  margin-top: 0;
+}
+
+.source-card input[type="file"],
+.source-card input[type="text"],
+.source-card select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: var(--surface-strong);
+}
+
+.repo-source-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
 .dataset-meta {
   margin-top: 12px;
 }
@@ -273,6 +316,11 @@ label {
   }
 
   .rule-item {
+    grid-template-columns: 1fr;
+  }
+
+  .source-grid,
+  .repo-source-controls {
     grid-template-columns: 1fr;
   }
 }
