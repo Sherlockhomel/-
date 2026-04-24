@@ -33,4 +33,4 @@
 
 ## 使用
 
-[网站跳转]([index.html](https://sherlockhomel.github.io/poems_search/))
+([网站跳转](https://sherlockhomel.github.io/poems_search/))
