@@ -63,26 +63,47 @@ function normalizeText(text) {
   return String(text || "").replace(/\s+/g, "");
 }
 
-function splitContentToSentenceGroups(content) {
-  return String(content || "")
-    .replace(/\s+/g, "")
-    .split(/(?<=[。！？；])/)
-    .map((group) => group.trim())
-    .filter(Boolean);
+function splitContentToSegments(content) {
+  const text = String(content || "").replace(/\s+/g, "");
+  const delimiters = new Set(["，", "。", "！", "？", "；", "、"]);
+  const segments = [];
+  let start = 0;
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (!delimiters.has(text[index])) {
+      continue;
+    }
+
+    if (start < index) {
+      segments.push({
+        text: text.slice(start, index),
+        start,
+        end: index - 1,
+      });
+    }
+
+    start = index + 1;
+  }
+
+  if (start < text.length) {
+    segments.push({
+      text: text.slice(start),
+      start,
+      end: text.length - 1,
+    });
+  }
+
+  return segments.filter((segment) => segment.text);
 }
 
-function matchesLineLength(sentenceGroup, lineLengthFilter) {
+function getEligibleSegments(content, lineLengthFilter) {
+  const segments = splitContentToSegments(content);
   if (lineLengthFilter === "all") {
-    return true;
+    return segments;
   }
 
   const expectedLength = Number(lineLengthFilter);
-  const segments = normalizeText(sentenceGroup)
-    .split(/[，、]/)
-    .map((segment) => segment.replace(/[。！？；]/g, "").trim())
-    .filter(Boolean);
-
-  return segments.length > 0 && segments.every((segment) => segment.length === expectedLength);
+  return segments.filter((segment) => segment.text.length === expectedLength);
 }
 
 function parseDataset(rawInput) {
@@ -230,6 +251,201 @@ function matchField(text, rules) {
   return rules.every((rule) => matchRule(text, rule));
 }
 
+function getRuleOccurrences(text, rule) {
+  const normalizedText = normalizeText(text);
+  const normalizedKeyword = normalizeText(rule.keyword);
+  if (!normalizedKeyword) {
+    return [];
+  }
+
+  if (rule.position) {
+    const start = rule.position - 1;
+    const end = start + normalizedKeyword.length - 1;
+    return normalizedText.slice(start, end + 1) === normalizedKeyword
+      ? [{ start, end }]
+      : [];
+  }
+
+  const occurrences = [];
+  let searchIndex = 0;
+
+  while (searchIndex <= normalizedText.length - normalizedKeyword.length) {
+    const foundIndex = normalizedText.indexOf(normalizedKeyword, searchIndex);
+    if (foundIndex === -1) {
+      break;
+    }
+
+    occurrences.push({
+      start: foundIndex,
+      end: foundIndex + normalizedKeyword.length - 1,
+    });
+    searchIndex = foundIndex + 1;
+  }
+
+  return occurrences;
+}
+
+function findBestSnippetRangeFromOccurrences(occurrencesByRule) {
+  if (occurrencesByRule.some((occurrences) => occurrences.length === 0)) {
+    return null;
+  }
+
+  const flattened = occurrencesByRule
+    .flatMap((occurrences, ruleIndex) =>
+      occurrences.map((occurrence) => ({
+        ...occurrence,
+        ruleIndex,
+      })),
+    )
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+
+  const counts = new Map();
+  let coveredRules = 0;
+  let left = 0;
+  let bestRange = null;
+
+  for (let right = 0; right < flattened.length; right += 1) {
+    const rightItem = flattened[right];
+    const currentCount = counts.get(rightItem.ruleIndex) || 0;
+    counts.set(rightItem.ruleIndex, currentCount + 1);
+    if (currentCount === 0) {
+      coveredRules += 1;
+    }
+
+    while (coveredRules === occurrencesByRule.length && left <= right) {
+      const leftItem = flattened[left];
+      const range = {
+        start: leftItem.start,
+        end: Math.max(...flattened.slice(left, right + 1).map((item) => item.end)),
+      };
+
+      if (
+        !bestRange ||
+        range.end - range.start < bestRange.end - bestRange.start ||
+        (range.end - range.start === bestRange.end - bestRange.start &&
+          range.start < bestRange.start)
+      ) {
+        bestRange = range;
+      }
+
+      const leftCount = counts.get(leftItem.ruleIndex) || 0;
+      if (leftCount === 1) {
+        counts.delete(leftItem.ruleIndex);
+        coveredRules -= 1;
+      } else {
+        counts.set(leftItem.ruleIndex, leftCount - 1);
+      }
+
+      left += 1;
+    }
+  }
+
+  return bestRange;
+}
+
+function findBestSnippetRange(text, rules) {
+  return findBestSnippetRangeFromOccurrences(
+    rules.map((rule) => getRuleOccurrences(text, rule)),
+  );
+}
+
+function expandSnippetToReadableText(text, range) {
+  if (!range) {
+    return normalizeText(text);
+  }
+
+  const normalizedText = normalizeText(text);
+  const boundaryPattern = /[，。、！？；]/;
+  let start = Math.max(0, range.start);
+  let end = Math.min(normalizedText.length - 1, range.end);
+
+  while (start > 0 && !boundaryPattern.test(normalizedText[start - 1])) {
+    start -= 1;
+  }
+
+  while (end < normalizedText.length - 1 && !boundaryPattern.test(normalizedText[end + 1])) {
+    end += 1;
+  }
+
+  if (end < normalizedText.length - 1 && boundaryPattern.test(normalizedText[end + 1])) {
+    end += 1;
+  }
+
+  return normalizedText.slice(start, end + 1).trim();
+}
+
+function getRuleOccurrencesInSegments(segments, rule) {
+  if (rule.position) {
+    return [];
+  }
+
+  return segments.flatMap((segment) =>
+    getRuleOccurrences(segment.text, rule).map((occurrence) => ({
+      start: segment.start + occurrence.start,
+      end: segment.start + occurrence.end,
+    })),
+  );
+}
+
+function buildContentSnippet(content, rules, lineLengthFilter) {
+  let range = null;
+
+  if (lineLengthFilter === "all") {
+    range = findBestSnippetRange(content, rules);
+  } else {
+    const eligibleSegments = getEligibleSegments(content, lineLengthFilter);
+    const occurrencesByRule = rules.map((rule) => {
+      if (rule.position) {
+        return getRuleOccurrences(content, rule).filter((occurrence) =>
+          eligibleSegments.some(
+            (segment) =>
+              occurrence.start >= segment.start && occurrence.end <= segment.end,
+          ),
+        );
+      }
+
+      return getRuleOccurrencesInSegments(eligibleSegments, rule);
+    });
+
+    range = findBestSnippetRangeFromOccurrences(occurrencesByRule);
+  }
+
+  const snippet = expandSnippetToReadableText(content, range);
+  return snippet || normalizeText(content);
+}
+
+function matchContentRuleInSegments(content, segments, rule) {
+  if (rule.position) {
+    const normalizedKeyword = normalizeText(rule.keyword);
+    const contentText = normalizeText(content);
+    const startIndex = rule.position - 1;
+    const endIndex = startIndex + normalizedKeyword.length - 1;
+
+    if (contentText.slice(startIndex, endIndex + 1) !== normalizedKeyword) {
+      return false;
+    }
+
+    return segments.some(
+      (segment) => startIndex >= segment.start && endIndex <= segment.end,
+    );
+  }
+
+  return segments.some((segment) => matchRule(segment.text, rule));
+}
+
+function matchContentField(content, rules, lineLengthFilter) {
+  if (lineLengthFilter === "all") {
+    return matchField(content, rules);
+  }
+
+  const eligibleSegments = getEligibleSegments(content, lineLengthFilter);
+  if (!eligibleSegments.length) {
+    return false;
+  }
+
+  return rules.every((rule) => matchContentRuleInSegments(content, eligibleSegments, rule));
+}
+
 function searchDataset(dataset, fields, lineLengthFilter, rules) {
   if (!dataset.length) {
     throw new Error("请先导入一份诗词数据");
@@ -256,17 +472,13 @@ function searchDataset(dataset, fields, lineLengthFilter, rules) {
       }
 
       if (fields.includes("content")) {
-        const sentenceGroups = splitContentToSentenceGroups(poem.content);
-        const matchedLines = sentenceGroups.filter((sentenceGroup) => {
-          if (!matchesLineLength(sentenceGroup, lineLengthFilter)) {
-            return false;
-          }
-
-          return matchField(sentenceGroup, rules);
-        });
-
-        if (matchedLines.length) {
-          matches.push({ type: "诗句", value: matchedLines });
+        if (matchContentField(poem.content, rules, lineLengthFilter)) {
+          matches.push({
+            type: "诗句",
+            value: {
+              snippet: buildContentSnippet(poem.content, rules, lineLengthFilter),
+            },
+          });
         }
       }
 
@@ -304,8 +516,10 @@ function renderResults(results) {
 
       const matchedLines = poem.matches
         .filter((match) => match.type === "诗句")
-        .flatMap((match) => match.value)
-        .map((line) => `<p class="matched-line">${escapeHtml(line)}</p>`)
+        .map(
+          (match) =>
+            `<p class="matched-line">${escapeHtml(match.value.snippet || poem.content)}</p>`,
+        )
         .join("");
 
       return `
@@ -314,7 +528,7 @@ function renderResults(results) {
           <div class="meta">${escapeHtml(poem.author)}</div>
           <div>${chips}</div>
           <div class="content-block">${escapeHtml(poem.content)}</div>
-          ${matchedLines ? `<div class="content-block"><strong>命中诗句：</strong>${matchedLines}</div>` : ""}
+          ${matchedLines ? `<div class="content-block"><strong>命中片段：</strong>${matchedLines}</div>` : ""}
         </article>
       `;
     })
